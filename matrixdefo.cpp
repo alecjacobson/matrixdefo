@@ -24,8 +24,8 @@ int main(int argc, char *argv[])
   Eigen::Matrix< float,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> U;
   igl::readDMAT(argv[2],U);
   assert((U.rows() == V.rows()*3) && "#U should be 3*#V");
-  std::cout<<"**warning** resizing to min(U.cols(),100)"<<std::endl;
-  U.conservativeResize(U.rows(),std::min(100,(int)U.cols()));
+  //std::cout<<"**warning** resizing to min(U.cols(),100)"<<std::endl;
+  //U.conservativeResize(U.rows(),std::min(100,(int)U.cols()));
   I = igl::LinSpaced< Eigen::Matrix< float,Eigen::Dynamic,1> >(V.rows(),0,V.rows()-1);
   const int n = V.rows();
   const int m = U.cols();
@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
     {
       for(int c = 0;c<3;c++)
       {
-        tex(i+j*n,c) = U(i+c*n,j);
+        tex(i*m+j,c) = U(i+c*n,j);
       }
     }
   }
@@ -89,7 +89,7 @@ void main()
   vec3 displacement = vec3(0,0,0);
   for(int j = 0;j < m; j++)
   {
-    int index = int(id)+j*n;
+    int index = int(id)*m+j;
     int si = index % s;
     int sj = int((index - si)/s);
     displacement = displacement + texelFetch(tex,ivec2(si,sj),0).xyz*q[j];
