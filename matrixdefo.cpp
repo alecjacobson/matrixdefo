@@ -1,6 +1,12 @@
 // make sure the modern opengl headers are included before any others
+#ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #define __gl_h_
+#else
+#include <GL/glew.h>
+#define GLEW_STATIC
+#include <GL/gl.h>
+#endif
 
 #include <igl/frustum.h>
 #include <igl/get_seconds.h>
@@ -54,10 +60,12 @@
       } \
     } while (0)
   // Should I just have _all_ opengl functions wrapped like this?
+#ifdef __APPLE__
 #  define    glVertexAttribPointer(X1,X2,X3,X4,X5,X6) \
     GL_CHECK(glVertexAttribPointer(X1,X2,X3,X4,X5,X6))
 #  define    glTexImage2D(X1,X2,X3,X4,X5,X6,X7,X8,X9) \
     GL_CHECK(glTexImage2D(X1,X2,X3,X4,X5,X6,X7,X8,X9))
+#endif
 #else
   #define GL_CHECK(stmt) stmt
 #endif
@@ -150,6 +158,16 @@ int main(int argc, char * argv[])
   }
 
   glfwMakeContextCurrent(window);
+#ifndef __APPLE__
+// If using GLEW version 1.13 or earlier
+  glewExperimental=GL_TRUE;
+  GLenum err=glewInit();
+  if(err!=GLEW_OK) {
+    // Problem: glewInit failed, something is seriously wrong.
+    std::cout << "glewInit failed: " << glewGetErrorString(err) << std::endl;
+    exit(1);
+  }
+#endif
 
       int major, minor, rev;
       major = glfwGetWindowAttrib(window, GLFW_CONTEXT_VERSION_MAJOR);
