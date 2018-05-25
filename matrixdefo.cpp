@@ -1,220 +1,32 @@
-// make sure the modern opengl headers are included before any others
-#ifdef __APPLE__
-#include <OpenGL/gl3.h>
-#define __gl_h_
-#else
-#include <GL/glew.h>
-#define GLEW_STATIC
-#include <GL/gl.h>
-#endif
 
-#include <igl/frustum.h>
-#include <igl/get_seconds.h>
-// WTF, why do I have to do this. Glad is fucking things up on mac
-#define IGL_OPENGL_GL_H
-#include <igl/opengl/create_shader_program.h>
-#include <igl/opengl/report_gl_error.h>
-#include <igl/readDMAT.h>
 #include <igl/read_triangle_mesh.h>
-#include <igl/get_seconds.h>
+#include <igl/viewer/Viewer.h>
+
+#include <igl/readDMAT.h>
+#include <igl/LinSpaced.h>
+#include <igl/opengl/report_gl_error.h>
+
 #include <Eigen/Core>
-#define GLFW_INCLUDE_GLU
-#include <GLFW/glfw3.h>
 
-#include <string>
-#include <chrono>
-#include <thread>
-#include <iostream>
-
-#ifndef NDEBUG
-  #define GL_CHECK(stmt) \
-    do \
-    { \
-      stmt; \
-      GLenum err = glGetError(); \
-      if (err != GL_NO_ERROR) \
-      { \
-        const auto gluErrorString = [](GLenum errorCode)->const char * \
-        { \
-          switch(errorCode) \
-          { \
-            default: \
-              return "unknown error code"; \
-            case GL_NO_ERROR: \
-              return "no error"; \
-            case GL_INVALID_ENUM: \
-              return "invalid enumerant"; \
-            case GL_INVALID_VALUE: \
-              return "invalid value"; \
-            case GL_INVALID_OPERATION: \
-              return "invalid operation"; \
-            case GL_OUT_OF_MEMORY: \
-              return "out of memory"; \
-            case GL_INVALID_FRAMEBUFFER_OPERATION: \
-              return "invalid framebuffer operation"; \
-          } \
-        }; \
-        printf( \
-         "OpenGL error %08x (%s), at %s:%i - for %s\n", \
-         err, gluErrorString(err), __FILE__, __LINE__, #stmt); \
-      } \
-    } while (0)
-  // Should I just have _all_ opengl functions wrapped like this?
-#ifdef __APPLE__
-#  define    glVertexAttribPointer(X1,X2,X3,X4,X5,X6) \
-    GL_CHECK(glVertexAttribPointer(X1,X2,X3,X4,X5,X6))
-#  define    glTexImage2D(X1,X2,X3,X4,X5,X6,X7,X8,X9) \
-    GL_CHECK(glTexImage2D(X1,X2,X3,X4,X5,X6,X7,X8,X9))
-#endif
-#else
-  #define GL_CHECK(stmt) stmt
-#endif
-
-std::string vertex_shader = R"(
-#version 330 core
-uniform mat4 proj;
-uniform mat4 model;
-uniform int n;
-uniform int m;
-uniform int s;
-uniform float q[512];
-in vec3 position;
-in float id;
-out vec3 vcolor;
-out vec4 vmodel_position;
-uniform sampler2D tex;
-void main()
+int main(int argc, char *argv[])
 {
-  vec3 displacement = vec3(0,0,0);
-  for(int j = 0;j < m; j++)
-  {
-    int index = int(id)+j*n;
-    int si = index % s;
-    int sj = int((index - si)/s);
-    displacement = displacement + texelFetch(tex,ivec2(si,sj),0).xyz*q[j];
-  }
-  vec3 deformed = position + displacement;
-  vmodel_position = model * vec4(deformed,1.);
-  gl_Position = proj * vmodel_position;
-  //vcolor = vec3(0.8,0.3,0.1);
-
-  int j = 0;
-  int index = int(id)+j*n;
-  int si = index % s;
-  int sj = int((index - si)/s);
-  //vcolor = texelFetch(tex,ivec2(si,sj),0).xyz/0.07249*0.5+0.5;
-  vcolor = (displacement*10.0*0.5+0.5);
-}
-)";
-std::string fragment_shader = R"(
-#version 330 core
-in vec3 vcolor;
-in vec4 vmodel_position;
-out vec3 color;
-void main()
-{
-  vec3 xTangent = dFdx(vmodel_position.xyz);
-  vec3 yTangent = dFdy(vmodel_position.xyz);
-  vec3 normal = normalize( cross( xTangent, yTangent ) );
-  color = max(normal.z,0.0)*vcolor;
-}
-)";
-
-// width, height, shader id, vertex array object
-int w=800,h=600;
-double highdpi=1;
-GLuint prog_id=0;
-GLuint VAO;
-// Mesh data: RowMajor is important to directly use in OpenGL
-Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor> V;
-Eigen::Matrix< float,Eigen::Dynamic,1> I;
-Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor> tex;
-Eigen::Matrix< float,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> U;
-Eigen::Matrix<GLuint,Eigen::Dynamic,3,Eigen::RowMajor> F;
-int main(int argc, char * argv[])
-{
+  using namespace Eigen;
   using namespace std;
-  if(!glfwInit())
-  {
-     cerr<<"Could not initialize glfw"<<endl;
-     return EXIT_FAILURE;
-  }
-  const auto & error = [] (int error, const char* description)
-  {
-    cerr<<description<<endl;
-  };
-  glfwSetErrorCallback(error);
-  glfwWindowHint(GLFW_SAMPLES, 4);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-  GLFWwindow* window = glfwCreateWindow(w, h, "WebGL", NULL, NULL);
-  if(!window)
-  {
-    glfwTerminate();
-    cerr<<"Could not create glfw window"<<endl;
-    return EXIT_FAILURE;
-  }
-
-  glfwMakeContextCurrent(window);
-#ifndef __APPLE__
-// If using GLEW version 1.13 or earlier
-  glewExperimental=GL_TRUE;
-  GLenum err=glewInit();
-  if(err!=GLEW_OK) {
-    // Problem: glewInit failed, something is seriously wrong.
-    std::cout << "glewInit failed: " << glewGetErrorString(err) << std::endl;
-    exit(1);
-  }
-#endif
-
-      int major, minor, rev;
-      major = glfwGetWindowAttrib(window, GLFW_CONTEXT_VERSION_MAJOR);
-      minor = glfwGetWindowAttrib(window, GLFW_CONTEXT_VERSION_MINOR);
-      rev = glfwGetWindowAttrib(window, GLFW_CONTEXT_REVISION);
-      printf("OpenGL version recieved: %d.%d.%d\n", major, minor, rev);
-      printf("Supported OpenGL is %s\n", (const char*)glGetString(GL_VERSION));
-      printf("Supported GLSL is %s\n", (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
-      GLint max_tex;
-      glGetIntegerv(GL_MAX_TEXTURE_SIZE,&max_tex);
-      printf("GL_MAX_TEXTURE_SIZE %d\n",max_tex);
-
-  glfwSetInputMode(window,GLFW_CURSOR,GLFW_CURSOR_NORMAL);
-  const auto & reshape = [] (GLFWwindow* window, int w, int h)
-  {
-    ::w=w,::h=h;
-  };
-  glfwSetWindowSizeCallback(window,reshape);
-
-  {
-    int width, height;
-    glfwGetFramebufferSize(window, &width, &height);
-    int width_window, height_window;
-    glfwGetWindowSize(window, &width_window, &height_window);
-    highdpi = width/width_window;
-    reshape(window,width_window*highdpi,height_window*highdpi);
-  }
-
-  // Compile each shader
-  igl::opengl::create_shader_program(vertex_shader,fragment_shader,{},prog_id);
-
-  // Read input mesh from file
+  Eigen::MatrixXd V;
+  Eigen::MatrixXi F;
   igl::read_triangle_mesh(argv[1],V,F);
 
-  // Assume that input is already registered to unit sphere
-  //V.rowwise() -= V.colwise().mean();
-  //V /= (V.colwise().maxCoeff()-V.colwise().minCoeff()).maxCoeff();
-  //V /= 2.2;
-
-  // U = [Ux;Uy;Uz], where Ux ∈ R^(n×k)
+  ///////////////////////////////////////////////////////////////////
+  // Load and prepare data
+  ///////////////////////////////////////////////////////////////////
+  Eigen::Matrix< float,Eigen::Dynamic,1> I;
+  Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor> tex;
+  Eigen::Matrix< float,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> U;
   igl::readDMAT(argv[2],U);
   assert((U.rows() == V.rows()*3) && "#U should be 3*#V");
   std::cout<<"**warning** resizing to min(U.cols(),100)"<<std::endl;
   U.conservativeResize(U.rows(),std::min(100,(int)U.cols()));
-
   I = igl::LinSpaced< Eigen::Matrix< float,Eigen::Dynamic,1> >(V.rows(),0,V.rows()-1);
-
   const int n = V.rows();
   const int m = U.cols();
   const int s = ceil(sqrt(n*m));
@@ -232,149 +44,196 @@ int main(int argc, char * argv[])
     }
   }
 
-  // Generate and attach buffers to vertex array
-  glGenVertexArrays(1, &VAO);
-  GLuint VBO, NBO, IBO, CBO, EBO;
-  glGenBuffers(1, &VBO);
-  glGenBuffers(1, &IBO);
-  glGenBuffers(1, &EBO);
-  glBindVertexArray(VAO);
-      igl::opengl::report_gl_error("7: ");
 
-  glBindBuffer(GL_ARRAY_BUFFER, VBO);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(float)*V.size(), V.data(), GL_STATIC_DRAW);
-  GLint pid = glGetAttribLocation(prog_id, "position");
-  glVertexAttribPointer(
-    pid, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), (GLvoid*)0);
-  glEnableVertexAttribArray(pid);
-      igl::opengl::report_gl_error("6: ");
+  ///////////////////////////////////////////////////////////////////
+  // Initialize viewer and opengl context
+  ///////////////////////////////////////////////////////////////////
+  igl::viewer::Viewer v;
+  v.data.set_mesh(V,F);
+  v.data.set_face_based(false);
+  v.core.show_lines = false;
+  v.launch_init(true,false);
+  v.opengl.shader_mesh.free();
+  
+  ///////////////////////////////////////////////////////////////////
+  // Compile new shaders
+  ///////////////////////////////////////////////////////////////////
+  {
+    std::string mesh_vertex_shader_string =
+R"(#version 150
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 proj;
+in vec3 position;
+in vec3 normal;
+out vec3 position_eye;
+out vec3 normal_eye;
+in vec4 Ka;
+in vec4 Kd;
+in vec4 Ks;
+in vec2 texcoord;
+out vec2 texcoordi;
+out vec4 Kai;
+out vec4 Kdi;
+out vec4 Ksi;
 
-  glBindBuffer(GL_ARRAY_BUFFER, IBO);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(float)*I.size(), I.data(), GL_STATIC_DRAW);
-  GLint iid = glGetAttribLocation(prog_id, "id");
-  glVertexAttribPointer(
-    iid, 1, GL_FLOAT, GL_FALSE, 1 * sizeof(GLfloat), (GLvoid*)0);
-  glEnableVertexAttribArray(iid);
-      igl::opengl::report_gl_error("5: ");
+in float id;
+uniform int n;
+uniform int m;
+uniform int s;
+uniform float q[512];
+uniform sampler2D tex;
 
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLuint)*F.size(), F.data(), GL_STATIC_DRAW);
-  glBindBuffer(GL_ARRAY_BUFFER, 0); 
-  glBindVertexArray(0);
-      igl::opengl::report_gl_error("3: ");
+void main()
+{
+  vec3 displacement = vec3(0,0,0);
+  for(int j = 0;j < m; j++)
+  {
+    int index = int(id)+j*n;
+    int si = index % s;
+    int sj = int((index - si)/s);
+    displacement = displacement + texelFetch(tex,ivec2(si,sj),0).xyz*q[j];
+  }
+  vec3 deformed = position + displacement;
 
-  glActiveTexture(GL_TEXTURE0);
-  GLuint vbo_tex;
-  glGenTextures(1, &vbo_tex);
+  position_eye = vec3 (view * model * vec4 (deformed, 1.0));
+  gl_Position = proj * vec4 (position_eye, 1.0);
+  Kai = Ka;
+  Kdi = Kd;
+  Ksi = Ks;
+})";
 
-  glBindTexture(GL_TEXTURE_2D, vbo_tex);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  // 8650×8650 texture was roughly the max I could still get 60 fps, 8700²
-  // already dropped to 1fps
-  //
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
-  //{
-  //  const int s = 8650;
-  //  Eigen::VectorXf tex = Eigen::VectorXf::Zero(s*s*3);
-  //  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
-  //}
-  igl::opengl::report_gl_error("2: ");
+    std::string mesh_fragment_shader_string =
+R"(#version 150
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 proj;
+uniform vec4 fixed_color;
+in vec3 position_eye;
+uniform vec3 light_position_world;
+vec3 Ls = vec3 (1, 1, 1);
+vec3 Ld = vec3 (1, 1, 1);
+vec3 La = vec3 (1, 1, 1);
+in vec4 Ksi;
+in vec4 Kdi;
+in vec4 Kai;
+uniform float specular_exponent;
+uniform float lighting_factor;
+out vec4 outColor;
+void main()
+{
+  vec3 xTangent = dFdx(position_eye);
+  vec3 yTangent = dFdy(position_eye);
+  vec3 normal_eye = normalize( cross( xTangent, yTangent ) );
+
+vec3 Ia = La * vec3(Kai);    // ambient intensity
+vec3 light_position_eye = vec3 (view * vec4 (light_position_world, 1.0));
+vec3 vector_to_light_eye = light_position_eye - position_eye;
+vec3 direction_to_light_eye = normalize (vector_to_light_eye);
+float dot_prod = dot (direction_to_light_eye, normal_eye);
+float clamped_dot_prod = max (dot_prod, 0.0);
+vec3 Id = Ld * vec3(Kdi) * clamped_dot_prod;    // Diffuse intensity
+
+vec3 reflection_eye = reflect (-direction_to_light_eye, normal_eye);
+vec3 surface_to_viewer_eye = normalize (-position_eye);
+float dot_prod_specular = dot (reflection_eye, surface_to_viewer_eye);
+dot_prod_specular = float(abs(dot_prod)==dot_prod) * max (dot_prod_specular, 0.0);
+float specular_factor = pow (dot_prod_specular, specular_exponent);
+vec3 Kfi = 0.5*vec3(Ksi);
+vec3 Lf = Ls;
+float fresnel_exponent = 2*specular_exponent;
+float fresnel_factor = 0;
+{
+  float NE = max( 0., dot( normal_eye, surface_to_viewer_eye));
+  fresnel_factor = pow (max(sqrt(1. - NE*NE),0.0), fresnel_exponent);
+}
+vec3 Is = Ls * vec3(Ksi) * specular_factor;    // specular intensity
+vec3 If = Lf * vec3(Kfi) * fresnel_factor;     // fresnel intensity
+vec4 color = vec4(lighting_factor * (If + Is + Id) + Ia + 
+  (1.0-lighting_factor) * vec3(Kdi),(Kai.a+Ksi.a+Kdi.a)/3);
+outColor = color;
+if (fixed_color != vec4(0.0)) outColor = fixed_color;
+})";
+    v.opengl.shader_mesh.init(
+      mesh_vertex_shader_string,
+      mesh_fragment_shader_string, 
+      "outColor");
+  }
+
+  ///////////////////////////////////////////////////////////////////
+  // Send texture and vertex attributes to GPU
+  ///////////////////////////////////////////////////////////////////
+  {
+    GLuint prog_id = v.opengl.shader_mesh.program_shader;
+    glUseProgram(prog_id);
+    GLuint VAO = v.opengl.vao_mesh;
+    glBindVertexArray(VAO);
+    GLuint IBO;
+    glGenBuffers(1, &IBO);
+    glBindBuffer(GL_ARRAY_BUFFER, IBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float)*I.size(), I.data(), GL_STATIC_DRAW);
+    GLint iid = glGetAttribLocation(prog_id, "id");
+    glVertexAttribPointer(
+      iid, 1, GL_FLOAT, GL_FALSE, 1 * sizeof(GLfloat), (GLvoid*)0);
+    glEnableVertexAttribArray(iid);
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0);
+    //glGenTextures(1, &v.opengl.vbo_tex);
+    glBindTexture(GL_TEXTURE_2D, v.opengl.vbo_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    // 8650×8650 texture was roughly the max I could still get 60 fps, 8700²
+    // already dropped to 1fps
+    //
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
+  }
 
 
-  // Main display routine
   Eigen::VectorXf q0 = Eigen::VectorXf::Zero(m,1);
   q0(0) = 1;
   Eigen::VectorXf q1 = Eigen::VectorXf::Zero(m,1);
-  while (!glfwWindowShouldClose(window))
+
+  v.callback_pre_draw = [&U,&q0,&q1,&m,&n,&s](igl::viewer::Viewer & v) ->bool
   {
-      double tic = igl::get_seconds();
-      // clear screen and set viewport
-      glClearColor(0.0,0.4,0.7,0.);
-      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-      glViewport(0,0,w,h);
-      glEnable(GL_DEPTH_TEST);
+    static size_t count = 0;
+    const int keyrate = 15;
+    if(count % keyrate == 0)
+    {
+      q0 = q1;
+      q1 = Eigen::VectorXf::Random(m,1).array()*0.5+0.5;
+      q1 = q1.array().pow(100.0).eval();
+    }
+    Eigen::VectorXf qa = q0 + double(count % keyrate)/(keyrate-1.0) * (q1 - q0);
+    qa /= qa.sum();
+    count++;
+    /////////////////////////////////////////////////////////
+    // Send uniforms to shader
+    /////////////////////////////////////////////////////////
+    GLuint prog_id = v.opengl.shader_mesh.program_shader;
+    glUseProgram(prog_id);
+    GLint n_loc = glGetUniformLocation(prog_id,"n");
+    glUniform1i(n_loc,n);
+    GLint m_loc = glGetUniformLocation(prog_id,"m");
+    glUniform1i(m_loc,m);
+    GLint s_loc = glGetUniformLocation(prog_id,"s");
+    glUniform1i(s_loc,s);
+    GLint q_loc = glGetUniformLocation(prog_id,"q");
+    glUniform1fv(q_loc,U.cols(),qa.data());
+    // Do this now so that we can stop texture from being loaded by viewer
+    if (v.data.dirty)
+    {
+      v.opengl.set_data(v.data, v.core.invert_normals);
+      v.data.dirty = igl::viewer::ViewerData::DIRTY_NONE;
+    }
+    v.opengl.dirty &= ~igl::viewer::ViewerData::DIRTY_TEXTURE;
+    return false;
+  };
 
-      // Projection and modelview matrices
-      Eigen::Matrix4f proj = Eigen::Matrix4f::Identity();
-      float near = 0.01;
-      float far = 100;
-      float top = tan(35./360.*M_PI)*near;
-      float right = top * (double)::w/(double)::h;
-      igl::frustum(-right,right,-top,top,near,far,proj);
-      Eigen::Affine3f model = Eigen::Affine3f::Identity();
-      model.translate(Eigen::Vector3f(0,0,-1.5));
-      // spin around
-      static size_t count = 0;
-      const int keyrate = 15;
-      if(count % keyrate == 0)
-      {
-        q0 = q1;
-        q1 = Eigen::VectorXf::Random(m,1).array()*0.5+0.5;
-        q1 = q1.array().pow(100.0).eval();
-      }
-      Eigen::VectorXf qa = q0 + double(count % keyrate)/(keyrate-1.0) * (q1 - q0);
-      qa /= qa.sum();
-      count++;
-
-      static size_t fps_tic_count = 0;
-      fps_tic_count++;
-      static double fps_tic = igl::get_seconds();
-      model.rotate(Eigen::AngleAxisf(M_PI,Eigen::Vector3f(0,1,0)));
-      model.rotate(Eigen::AngleAxisf(-M_PI*0.5,Eigen::Vector3f(0,0,1)));
-      {
-        const double fps_toc = igl::get_seconds();
-        if((fps_toc - fps_tic) > 2.0)
-        {
-          std::cout<<double(fps_tic_count)/(fps_toc-fps_tic)<<" fps"<<std::endl;
-          fps_tic = igl::get_seconds();
-          fps_tic_count = 0;
-        }
-      }
-
-      // select program and attach uniforms
-      igl::opengl::report_gl_error("1: ");
-      glUseProgram(prog_id);
-      GLint proj_loc = glGetUniformLocation(prog_id,"proj");
-      glUniformMatrix4fv(proj_loc,1,GL_FALSE,proj.data());
-      GLint model_loc = glGetUniformLocation(prog_id,"model");
-      glUniformMatrix4fv(model_loc,1,GL_FALSE,model.matrix().data());
-      GLint n_loc = glGetUniformLocation(prog_id,"n");
-      glUniform1i(n_loc,n);
-      GLint m_loc = glGetUniformLocation(prog_id,"m");
-      glUniform1i(m_loc,m);
-      GLint s_loc = glGetUniformLocation(prog_id,"s");
-      glUniform1i(s_loc,s);
-      GLint q_loc = glGetUniformLocation(prog_id,"q");
-      igl::opengl::report_gl_error("0: ");
-      glUniform1fv(q_loc,U.cols(),qa.data());
-      igl::opengl::report_gl_error("after: ");
-
-      // Draw mesh as wireframe
-      glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-      glBindVertexArray(VAO);
-      glActiveTexture(GL_TEXTURE0);
-      glBindTexture(GL_TEXTURE_2D, vbo_tex);
-      glDrawElements(GL_TRIANGLES, F.size(), GL_UNSIGNED_INT, 0);
-      glBindVertexArray(0);
-
-      glfwSwapBuffers(window);
-
-      {
-        glfwPollEvents();
-        // In microseconds
-        double duration = 1000000.*(igl::get_seconds()-tic);
-        const double min_duration = 1000000./60.;
-        if(duration<min_duration)
-        {
-          std::this_thread::sleep_for(std::chrono::microseconds((int)(min_duration-duration)));
-        }
-      }
-  }
-  glfwDestroyWindow(window);
-  glfwTerminate();
-  return EXIT_SUCCESS;
+  v.core.animation_max_fps = 60.0;
+  v.core.is_animating = true;
+  v.launch_rendering(true);
+  v.launch_shut();
 }
