@@ -124,7 +124,7 @@ void main()
 {
   vec3 xTangent = dFdx(position_eye);
   vec3 yTangent = dFdy(position_eye);
-  vec3 normal_eye = normalize( cross( xTangent, yTangent ) );
+  vec3 normal_eye = normalize( cross( yTangent, xTangent ) );
 
 vec3 Ia = La * vec3(Kai);    // ambient intensity
 vec3 light_position_eye = vec3 (view * vec4 (light_position_world, 1.0));
