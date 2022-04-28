@@ -13,11 +13,14 @@ https://user-images.githubusercontent.com/2241689/165660420-38aade02-31d2-4186-9
     cmake ../
     make
 
+# run elephant
 
-# before you run
+    ./matrixdefo ../data/elephant{.obj,-modes.dmat}
+
+# before you run faces
 
     cat ../data/face-deltas.dmat.* > ../data/face-deltas.dmat 
 
-# run
+# run faces
 
     ./matrixdefo ../data/face{.ply,-deltas.dmat}
