@@ -206,21 +206,39 @@ R"(#version 150
 
 
   Eigen::VectorXf q0 = Eigen::VectorXf::Zero(m,1);
-  q0(0) = 1;
   Eigen::VectorXf q1 = Eigen::VectorXf::Zero(m,1);
+  bool random = false;
+  if(random)
+  {
+    q0(0) = 1;
+  }
 
-  v.callback_pre_draw = [&U,&q0,&q1,&m,&n,&s](igl::opengl::glfw::Viewer & v) ->bool
+  v.callback_pre_draw = [&U,&q0,&q1,&m,&n,&s,&random](igl::opengl::glfw::Viewer & v) ->bool
   {
     static size_t count = 0;
     const int keyrate = 15;
-    if(count % keyrate == 0)
+    Eigen::VectorXf qa = Eigen::VectorXf::Zero(m,1);
+    if(random)
     {
-      q0 = q1;
-      q1 = Eigen::VectorXf::Random(m,1).array()*0.5+0.5;
-      q1 = q1.array().pow(100.0).eval();
+      if(count % keyrate == 0)
+      {
+        q0 = q1;
+        q1 = Eigen::VectorXf::Random(m,1).array()*0.5+0.5;
+        q1 = q1.array().pow(100.0).eval();
+      }
+      const double f = double(count % keyrate)/(keyrate-1.0);
+      const double t = 3*f*f - 2*f*f*f;
+      qa = q0 + t * (q1 - q0);
+      qa /= qa.sum();
+    }else
+    {
+      const int i = (count/keyrate)%m;
+      const double s = double(count % keyrate)/(keyrate-1.0);
+      const double f = 1.0-2.0*abs(s-0.5);
+      const double t = 3*f*f - 2*f*f*f;
+      qa(i) = t;
     }
-    Eigen::VectorXf qa = q0 + double(count % keyrate)/(keyrate-1.0) * (q1 - q0);
-    qa /= qa.sum();
+
     count++;
     /////////////////////////////////////////////////////////
     // Send uniforms to shader
@@ -248,6 +266,16 @@ R"(#version 150
     v.data().meshgl.dirty &= ~igl::opengl::MeshGL::DIRTY_TEXTURE;
     return false;
   };
+  v.callback_key_pressed= [&random](igl::opengl::glfw::Viewer & v, unsigned int key, unsigned int mod) ->bool
+  {
+    if(key == ' ')
+    {
+      random = !random;
+      return true;
+    }
+    return false;
+  };
+  printf("[space]  toggle between cycling through columns and random transitions.\n");
 
   v.core().animation_max_fps = 60.0;
   v.core().is_animating = true;
