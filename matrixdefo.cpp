@@ -1,4 +1,3 @@
-
 #include <igl/read_triangle_mesh.h>
 #include <igl/opengl/glfw/Viewer.h>
 #include <igl/opengl/report_gl_error.h>
@@ -10,6 +9,20 @@
 #include <igl/opengl/destroy_shader_program.h>
 
 #include <Eigen/Core>
+
+// Doesn't appear to be necessary on my mac
+// https://stackoverflow.com/a/466278/148668
+unsigned long upper_power_of_two(unsigned long v)
+{
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return v;
+}
 
 int main(int argc, char *argv[])
 {
@@ -23,7 +36,8 @@ int main(int argc, char *argv[])
   // Load and prepare data
   ///////////////////////////////////////////////////////////////////
   Eigen::Matrix< float,Eigen::Dynamic,1> I;
-  Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor> tex;
+  // Eigen::DontAlign does appear to be necessary on my mac
+  Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor | Eigen::DontAlign> tex;
   Eigen::Matrix< float,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> U;
   {
     Eigen::Matrix< double ,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> Ud;
@@ -36,7 +50,7 @@ int main(int argc, char *argv[])
   I = igl::LinSpaced< Eigen::Matrix< float,Eigen::Dynamic,1> >(V.rows(),0,V.rows()-1);
   const int n = V.rows();
   const int m = U.cols();
-  const int s = ceil(sqrt(n*m));
+  const int s = upper_power_of_two(ceil(sqrt(n*m)));
   assert(s*s > n*m);
   printf("%d %d %d\n",n,m,s);
   tex = Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor>::Zero(s*s,3);
