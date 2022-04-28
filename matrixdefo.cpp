@@ -201,7 +201,7 @@ R"(#version 150
     // 8650×8650 texture was roughly the max I could still get 60 fps, 8700²
     // already dropped to 1fps
     //
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
   }
 
 
