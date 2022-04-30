@@ -8,6 +8,8 @@
 #include <igl/readDMAT.h>
 #include <igl/LinSpaced.h>
 #include <igl/opengl/destroy_shader_program.h>
+#include <igl/get_seconds.h>
+#include <GLFW/glfw3.h>
 
 #include <Eigen/Core>
 
@@ -162,6 +164,7 @@ R"(#version 150
       vec4 color = vec4(lighting_factor * (Is + Id) + Ia + (1.0-lighting_factor) * vec3(Kdi),(Kai.a+Ksi.a+Kdi.a)/3);
       outColor = mix(vec4(1,1,1,1), texture(tex, texcoordi), texture_factor) * color;
       if (fixed_color != vec4(0.0)) outColor = fixed_color;
+      outColor.xyz = normal_eye*0.5+0.5;
     }
   }
 )";
@@ -216,6 +219,7 @@ R"(#version 150
   v.callback_pre_draw = [&U,&q0,&q1,&m,&n,&s,&random](igl::opengl::glfw::Viewer & v) ->bool
   {
     static size_t count = 0;
+    static double t0 = igl::get_seconds();
     const int keyrate = 15;
     Eigen::VectorXf qa = Eigen::VectorXf::Zero(m,1);
     if(random)
@@ -237,6 +241,13 @@ R"(#version 150
       const double f = 1.0-2.0*abs(s-0.5);
       const double t = 3*f*f - 2*f*f*f;
       qa(i) = t;
+    }
+    if(count % 120 == 0)
+    {
+      const double t = igl::get_seconds();
+      const double fps = 120.0/(t-t0);
+      printf("fps: %g\nspf: %g\n",fps,1.0/fps);
+      t0 = igl::get_seconds();
     }
 
     count++;
@@ -279,6 +290,38 @@ R"(#version 150
 
   v.core().animation_max_fps = 60.0;
   v.core().is_animating = true;
-  v.launch_rendering(true);
+  //v.launch_rendering(true);
+
+  const double fpsLimit = 1.0 / 60.0;
+double lastUpdateTime = 0;  // number of seconds since the last loop
+double lastFrameTime = 0;   // number of seconds since the last frame
+
+// This while loop repeats as fast as possible
+while (!glfwWindowShouldClose(v.window))
+{
+    double now = glfwGetTime();
+    double deltaTime = now - lastUpdateTime;
+
+    glfwPollEvents();
+
+    // update your application logic here,
+    // using deltaTime if necessary (for physics, tweening, etc.)
+
+    // This if-statement only executes once every 60th of a second
+    if ((now - lastFrameTime) >= fpsLimit)
+    {
+        // draw your frame here
+        v.draw();
+
+        glfwSwapBuffers(v.window);
+
+        // only set lastFrameTime when you actually draw something
+        lastFrameTime = now;
+    }
+
+    // set lastUpdateTime every iteration
+    lastUpdateTime = now;
+}
+  
   v.launch_shut();
 }
