@@ -74,6 +74,7 @@ int main(int argc, char *argv[])
 R"(#version 150
 uniform mat4 view;
 uniform mat4 proj;
+uniform int use_gpu;
 in vec3 position;
 in vec3 normal;
 out vec3 position_eye;
@@ -97,14 +98,22 @@ uniform sampler2D tex;
 void main()
 {
   vec3 displacement = vec3(0,0,0);
-  for(int j = 0;j < m; j++)
+  if(use_gpu!=0)
   {
-    int index = int(id)*m+j;
+    int index = int(id)*m;
     int si = index % s;
     int sj = int((index - si)/s);
-    displacement = displacement + texelFetch(tex,ivec2(si,sj),0).xyz*q[j];
+    // Hardcoding m gives a bit of a speedup
+    for(int j = 0;j < m; j++)
+    {
+      sj += int(si==s);
+      si =  int(si!=s)*si;
+      displacement = displacement + texelFetch(tex,ivec2(si,sj),0).xyz*q[j];
+      index++;
+      si++;
+    }
   }
-  vec3 deformed = position + displacement;
+  vec3 deformed = position + 0.02*displacement;
 
   position_eye = vec3 (view * vec4 (deformed, 1.0));
   gl_Position = proj * vec4 (position_eye, 1.0);
@@ -204,7 +213,7 @@ R"(#version 150
     // 8650×8650 texture was roughly the max I could still get 60 fps, 8700²
     // already dropped to 1fps
     //
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
   }
 
 
@@ -216,7 +225,8 @@ R"(#version 150
     q0(0) = 1;
   }
 
-  v.callback_pre_draw = [&U,&q0,&q1,&m,&n,&s,&random](igl::opengl::glfw::Viewer & v) ->bool
+  bool use_gpu = true;
+  v.callback_pre_draw = [&](igl::opengl::glfw::Viewer & v) ->bool
   {
     static size_t count = 0;
     static double t0 = igl::get_seconds();
@@ -242,10 +252,11 @@ R"(#version 150
       const double t = 3*f*f - 2*f*f*f;
       qa(i) = t;
     }
-    if(count % 120 == 0)
+    const int max_count = 60;
+    if(count % max_count == 0)
     {
       const double t = igl::get_seconds();
-      const double fps = 120.0/(t-t0);
+      const double fps = double(max_count)/(t-t0);
       printf("fps: %g\nspf: %g\n",fps,1.0/fps);
       t0 = igl::get_seconds();
     }
@@ -258,31 +269,48 @@ R"(#version 150
     glUseProgram(prog_id);
     GLint n_loc = glGetUniformLocation(prog_id,"n");
     glUniform1i(n_loc,n);
+    GLint use_gpu_loc = glGetUniformLocation(prog_id,"use_gpu");
+    glUniform1i(use_gpu_loc,use_gpu);
     GLint m_loc = glGetUniformLocation(prog_id,"m");
     glUniform1i(m_loc,m);
     GLint s_loc = glGetUniformLocation(prog_id,"s");
     glUniform1i(s_loc,s);
     GLint q_loc = glGetUniformLocation(prog_id,"q");
     glUniform1fv(q_loc,U.cols(),qa.data());
-    // Do this now so that we can stop texture from being loaded by viewer
-    if (v.data().dirty)
+    if(use_gpu)
     {
-      v.data().updateGL(
-        v.data(), 
-        v.data().invert_normals,
-        v.data().meshgl
-        );
-      v.data().dirty = igl::opengl::MeshGL::DIRTY_NONE;
+      // Do this now so that we can stop texture from being loaded by viewer
+      if (v.data().dirty)
+      {
+        v.data().updateGL(
+          v.data(), 
+          v.data().invert_normals,
+          v.data().meshgl
+          );
+        v.data().dirty = igl::opengl::MeshGL::DIRTY_NONE;
+      }
+      v.data().meshgl.dirty &= ~igl::opengl::MeshGL::DIRTY_TEXTURE;
+    }else
+    {
+      Eigen::VectorXd res = (U*qa).cast<double>();
+      Eigen::MatrixXd W = V + Eigen::Map<Eigen::MatrixXd>(res.data(),V.rows(),V.cols());
+      v.data().set_vertices(W);
     }
-    v.data().meshgl.dirty &= ~igl::opengl::MeshGL::DIRTY_TEXTURE;
     return false;
   };
-  v.callback_key_pressed= [&random](igl::opengl::glfw::Viewer & v, unsigned int key, unsigned int mod) ->bool
+  v.callback_key_pressed= [&](igl::opengl::glfw::Viewer & v, unsigned int key, unsigned int mod) ->bool
   {
-    if(key == ' ')
+    switch(key)
     {
-      random = !random;
-      return true;
+      case ' ':
+        random = !random;
+        return true;
+      case 'G': 
+      case 'g': 
+        use_gpu = !use_gpu;
+        v.data().set_vertices(V);
+        printf("Using %s\n",use_gpu?"GPU":"CPU");
+        return true;
     }
     return false;
   };
@@ -292,9 +320,10 @@ R"(#version 150
   v.core().is_animating = true;
   //v.launch_rendering(true);
 
-  const double fpsLimit = 1.0 / 60.0;
+  const double fpsLimit = 1.0 / 240.0;
 double lastUpdateTime = 0;  // number of seconds since the last loop
 double lastFrameTime = 0;   // number of seconds since the last frame
+glfwSwapInterval(1);
 
 // This while loop repeats as fast as possible
 while (!glfwWindowShouldClose(v.window))
@@ -314,6 +343,7 @@ while (!glfwWindowShouldClose(v.window))
         v.draw();
 
         glfwSwapBuffers(v.window);
+        glFinish();
 
         // only set lastFrameTime when you actually draw something
         lastFrameTime = now;
