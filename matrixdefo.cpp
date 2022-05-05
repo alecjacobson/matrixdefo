@@ -13,6 +13,11 @@
 
 #include <Eigen/Core>
 
+class ViewerDataTBO : public igl::opengl::ViewerData
+{
+
+};
+
 int main(int argc, char *argv[])
 {
   using namespace Eigen;
@@ -42,6 +47,7 @@ int main(int argc, char *argv[])
   assert(s*s > n*m);
   printf("%d %d %d\n",n,m,s);
   tex = Eigen::Matrix< float,Eigen::Dynamic,3,Eigen::RowMajor>::Zero(s*s,3);
+  printf("Copying into tex...\n");
   for(int j = 0;j<m;j++)
   {
     for(int i = 0;i<n;i++)
@@ -50,6 +56,20 @@ int main(int argc, char *argv[])
       {
         tex(i*m+j,c) = U(i+c*n,j);
       }
+    }
+  }
+  // Copy into #V by 4 
+  Eigen::Matrix<Eigen::half,Eigen::Dynamic,1> Utbo(n*m*4);
+  printf("Copying into Utbo...\n");
+  for(int i = 0;i<n;i++)
+  {
+    for(int j = 0;j<m;j++)
+    {
+      for(int c = 0;c<3;c++)
+      {
+        Utbo(i*m*4+j*4+c) = Eigen::half( U(i+c*n,j) );
+      }
+      Utbo(i*m*4+j*4+3) = Eigen::half( 0.0 );
     }
   }
 
@@ -93,24 +113,19 @@ uniform int n;
 uniform int m;
 uniform int s;
 uniform float q[512];
-uniform sampler2D tex;
+uniform samplerBuffer buf;
 
 void main()
 {
   vec3 displacement = vec3(0,0,0);
   if(use_gpu!=0)
   {
-    int index = int(id)*m;
-    int si = index % s;
-    int sj = int((index - si)/s);
+    int sj = int(id)*m;
     // Hardcoding m gives a bit of a speedup
     for(int j = 0;j < m; j++)
     {
-      sj += int(si==s);
-      si =  int(si!=s)*si;
-      displacement = displacement + texelFetch(tex,ivec2(si,sj),0).xyz*q[j];
-      index++;
-      si++;
+      displacement = displacement + texelFetch(buf,sj).xyz*q[j];
+      sj++;
     }
   }
   vec3 deformed = position + 0.02*displacement;
@@ -136,8 +151,6 @@ R"(#version 150
   in vec4 Ksi;
   in vec4 Kdi;
   in vec4 Kai;
-  in vec2 texcoordi;
-  uniform sampler2D tex;
   uniform float specular_exponent;
   uniform float lighting_factor;
   uniform float texture_factor;
@@ -149,32 +162,8 @@ R"(#version 150
     vec3 xTangent = dFdx(position_eye);
     vec3 yTangent = dFdy(position_eye);
     vec3 normal_eye = normalize( cross( yTangent, xTangent ) );
-
-    if(matcap_factor == 1.0f)
-    {
-      vec2 uv = normalize(normal_eye).xy * 0.5 + 0.5;
-      outColor = texture(tex, uv);
-    }else
-    {
-      vec3 Ia = La * vec3(Kai);    // ambient intensity
-
-      vec3 vector_to_light_eye = light_position_eye - position_eye;
-      vec3 direction_to_light_eye = normalize (vector_to_light_eye);
-      float dot_prod = dot (direction_to_light_eye, normalize(normal_eye));
-      float clamped_dot_prod = abs(max (dot_prod, -double_sided));
-      vec3 Id = Ld * vec3(Kdi) * clamped_dot_prod;    // Diffuse intensity
-
-      vec3 reflection_eye = reflect (-direction_to_light_eye, normalize(normal_eye));
-      vec3 surface_to_viewer_eye = normalize (-position_eye);
-      float dot_prod_specular = dot (reflection_eye, surface_to_viewer_eye);
-      dot_prod_specular = float(abs(dot_prod)==dot_prod) * abs(max (dot_prod_specular, -double_sided));
-      float specular_factor = pow (dot_prod_specular, specular_exponent);
-      vec3 Is = Ls * vec3(Ksi) * specular_factor;    // specular intensity
-      vec4 color = vec4(lighting_factor * (Is + Id) + Ia + (1.0-lighting_factor) * vec3(Kdi),(Kai.a+Ksi.a+Kdi.a)/3);
-      outColor = mix(vec4(1,1,1,1), texture(tex, texcoordi), texture_factor) * color;
-      if (fixed_color != vec4(0.0)) outColor = fixed_color;
-      outColor.xyz = normal_eye*0.5+0.5;
-    }
+    outColor.xyz = normal_eye*0.5+0.5;
+    outColor.a = 1;
   }
 )";
 
@@ -202,18 +191,15 @@ R"(#version 150
       iid, 1, GL_FLOAT, GL_FALSE, 1 * sizeof(GLfloat), (GLvoid*)0);
     glEnableVertexAttribArray(iid);
     glBindVertexArray(0);
+
+    igl::opengl::report_gl_error("before");
     glActiveTexture(GL_TEXTURE0);
-    //glGenTextures(1, &v.data().meshgl.vbo_tex);
-    glBindTexture(GL_TEXTURE_2D, v.data().meshgl.vbo_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    // 8650×8650 texture was roughly the max I could still get 60 fps, 8700²
-    // already dropped to 1fps
-    //
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, s,s, 0, GL_RGB, GL_FLOAT, tex.data());
+    glGenBuffers(1,&v.data().meshgl.tbo);
+    glBindBuffer(GL_TEXTURE_BUFFER, v.data().meshgl.tbo);
+    glBufferData(GL_TEXTURE_BUFFER, sizeof(Eigen::half)*Utbo.size(), Utbo.data(), GL_STATIC_DRAW);
+    glGenTextures(1, &v.data().meshgl.vbo_tex);
+    glBindBuffer(GL_TEXTURE_BUFFER,0);
+    igl::opengl::report_gl_error("after");
   }
 
 
